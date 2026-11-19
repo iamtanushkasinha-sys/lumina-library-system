@@ -1,0 +1,9 @@
+{
+  "name": "lumina-library-management-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Lumina Library Management System with Role-Based Access Control",
+  "scripts": {
+    "start": "serve ."
+  }
+}
