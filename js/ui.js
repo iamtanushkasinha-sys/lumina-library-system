@@ -1764,6 +1764,92 @@ class UIRenderer {
 
     window.print();
   }
+
+  // ================= CLOUD SYNC UI CONTROLLERS =================
+
+  openCloudSyncModal() {
+    this.openModal('modalCloudSync');
+    if (window.storageService) {
+      const input = document.getElementById('cloudDbUrlInput');
+      if (input && window.storageService.cloudDbUrl) {
+        input.value = window.storageService.cloudDbUrl;
+      }
+      window.storageService.updateSyncUI();
+    }
+  }
+
+  async saveCloudSyncUrl() {
+    const input = document.getElementById('cloudDbUrlInput');
+    const url = input ? input.value.trim() : '';
+    if (!url) {
+      this.toast("Please enter a Firebase Realtime Database URL.", "warning");
+      return;
+    }
+
+    try {
+      this.toast("Connecting to Cloud Database...", "info");
+      await window.storageService.setCloudDbUrl(url);
+      this.toast("Connected to Cloud Database! Real-time sync is now active.", "success");
+      this.closeModal('modalCloudSync');
+      this.refreshCurrentView();
+    } catch (err) {
+      this.toast("Connection failed: " + err.message, "error");
+    }
+  }
+
+  disconnectCloudSync() {
+    if (confirm("Disconnect from cloud database and switch back to local browser storage?")) {
+      window.storageService.disconnectCloud();
+      const input = document.getElementById('cloudDbUrlInput');
+      if (input) input.value = '';
+      this.toast("Switched to Local Browser Storage.", "info");
+      this.closeModal('modalCloudSync');
+    }
+  }
+
+  async syncCloudNow() {
+    if (!window.storageService.cloudDbUrl) {
+      this.toast("No cloud database connected. Enter your Firebase URL first.", "warning");
+      return;
+    }
+    this.toast("Synchronizing data with Cloud...", "info");
+    const data = await window.storageService.pullFromCloud();
+    if (data) {
+      this.toast("Sync complete! Latest catalog and patron records updated.", "success");
+    } else {
+      this.toast("Sync failed. Check your Firebase database connection.", "error");
+    }
+  }
+
+  copyShareableCloudLink() {
+    const link = window.storageService.getShareableLink();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(link).then(() => {
+        this.toast("🔗 Shareable link copied! Send it to any laptop or phone.", "success");
+      }).catch(() => {
+        prompt("Copy this link to connect other devices:", link);
+      });
+    } else {
+      prompt("Copy this link to connect other devices:", link);
+    }
+  }
+
+  refreshCurrentView() {
+    try {
+      window.libraryEngine.refreshCirculationState();
+      if (this.currentView === 'dashboard') this.renderDashboard();
+      else if (this.currentView === 'books') this.renderBooks();
+      else if (this.currentView === 'members') this.renderMembers();
+      else if (this.currentView === 'circulation') this.renderCirculation();
+      else if (this.currentView === 'reservations') this.renderReservations();
+      else if (this.currentView === 'student-portal') this.renderStudentPortal();
+      if (typeof this.renderHeroQuickLogins === 'function') {
+        this.renderHeroQuickLogins();
+      }
+    } catch (e) {
+      console.warn("View refresh error:", e);
+    }
+  }
 }
 
 window.uiRenderer = new UIRenderer();

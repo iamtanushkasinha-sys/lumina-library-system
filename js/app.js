@@ -4,6 +4,11 @@
  */
 
 document.addEventListener('DOMContentLoaded', () => {
+  // Update Cloud Sync Status Indicator
+  if (window.storageService) {
+    window.storageService.updateSyncUI();
+  }
+
   // Initialize Storage and Circulation state
   window.libraryEngine.refreshCirculationState();
 

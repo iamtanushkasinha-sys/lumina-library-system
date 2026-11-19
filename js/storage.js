@@ -1,15 +1,69 @@
 /**
  * Storage Service
- * Handles persistence in localStorage, data integrity, import & export.
+ * Handles persistence in localStorage, data integrity, import & export,
+ * and live multi-device real-time cloud synchronization.
  */
 
 const STORAGE_KEY = 'lumina_library_data_v1';
 const BACKUP_MEMBERS_KEY = 'lumina_custom_registered_members_v1';
 const BACKUP_USERS_KEY = 'lumina_custom_registered_users_v1';
+const CLOUD_DB_KEY = 'lumina_cloud_db_url_v1';
 
 class StorageService {
   constructor() {
+    this.cloudDbUrl = null;
+    this.isCloudConnected = false;
+    this.isSyncing = false;
+    this.lastSyncTime = null;
+    this.eventSource = null;
+    this._pendingCloudData = null;
+    this._pushDebounceTimer = null;
+
+    this.checkCloudUrlFromQuery();
     this.init();
+    this.initCloudSync();
+  }
+
+  // Detect and auto-configure cloud URL from URL query parameter e.g. ?cloud=https://...
+  checkCloudUrlFromQuery() {
+    try {
+      if (typeof window !== 'undefined' && window.location && window.location.search) {
+        const params = new URLSearchParams(window.location.search);
+        const cloudParam = params.get('cloud');
+        if (cloudParam) {
+          let clean = cloudParam.trim().replace(/\/+$/, '');
+          if (clean.endsWith('.json')) clean = clean.slice(0, -5);
+          if (clean.endsWith('/lumina_data')) clean = clean.slice(0, -12);
+          if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+            clean = 'https://' + clean;
+          }
+          localStorage.setItem(CLOUD_DB_KEY, clean);
+
+          // Clean URL parameter from address bar without reloading
+          const cleanSearch = new URLSearchParams(window.location.search);
+          cleanSearch.delete('cloud');
+          const newUrl = window.location.pathname + (cleanSearch.toString() ? '?' + cleanSearch.toString() : '') + window.location.hash;
+          window.history.replaceState({}, document.title, newUrl);
+        }
+      }
+    } catch (e) {
+      console.warn("Could not parse cloud query param:", e);
+    }
+  }
+
+  async initCloudSync() {
+    try {
+      const saved = localStorage.getItem(CLOUD_DB_KEY);
+      if (saved && saved.startsWith('http')) {
+        this.cloudDbUrl = saved.trim().replace(/\/+$/, '');
+        this.updateSyncUI();
+        await this.pullFromCloud();
+        this.startRealtimeListener();
+      }
+    } catch (e) {
+      console.warn("Cloud sync initialization failed:", e);
+    }
+    this.updateSyncUI();
   }
 
   init() {
@@ -92,11 +146,246 @@ class StorageService {
       localStorage.setItem(STORAGE_KEY, str);
       sessionStorage.setItem(STORAGE_KEY, str);
       this._memoryData = data;
+      if (this.cloudDbUrl) {
+        this.pushToCloud(data);
+      }
       return true;
     } catch (e) {
       console.error("Error saving to localStorage:", e);
       this._memoryData = data;
+      if (this.cloudDbUrl) {
+        this.pushToCloud(data);
+      }
       return false;
+    }
+  }
+
+  // Live Cloud Push (Debounced 250ms for performance and batching)
+  pushToCloud(data) {
+    if (!this.cloudDbUrl) return;
+    if (this._pushDebounceTimer) {
+      clearTimeout(this._pushDebounceTimer);
+    }
+    this._pendingCloudData = data;
+    this._pushDebounceTimer = setTimeout(async () => {
+      const dataToPush = this._pendingCloudData;
+      if (!dataToPush || !this.cloudDbUrl) return;
+      try {
+        this.isSyncing = true;
+        this.updateSyncUI();
+        const endpoint = `${this.cloudDbUrl}/lumina_data.json`;
+        const res = await fetch(endpoint, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(dataToPush)
+        });
+        if (!res.ok) {
+          throw new Error(`Cloud server returned HTTP ${res.status}`);
+        }
+        this.isCloudConnected = true;
+        this.lastSyncTime = new Date();
+      } catch (err) {
+        console.warn("Cloud sync push error:", err);
+        this.isCloudConnected = false;
+      } finally {
+        this.isSyncing = false;
+        this.updateSyncUI();
+      }
+    }, 250);
+  }
+
+  // Pull latest full dataset from Cloud Database
+  async pullFromCloud() {
+    if (!this.cloudDbUrl) return null;
+    try {
+      this.isSyncing = true;
+      this.updateSyncUI();
+      const endpoint = `${this.cloudDbUrl}/lumina_data.json`;
+      const res = await fetch(endpoint);
+      if (!res.ok) {
+        throw new Error(`Cloud server returned HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      if (data && data.books && data.members && data.loans) {
+        this.isCloudConnected = true;
+        this.lastSyncTime = new Date();
+        this._memoryData = data;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        if (window.uiRenderer && typeof window.uiRenderer.refreshCurrentView === 'function') {
+          window.uiRenderer.refreshCurrentView();
+        }
+        return data;
+      } else if (data === null) {
+        // Newly created database is empty. Auto-seed with local dataset!
+        console.log("Empty cloud database detected. Auto-seeding local library data to cloud...");
+        const localData = this.getData();
+        await fetch(endpoint, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(localData)
+        });
+        this.isCloudConnected = true;
+        this.lastSyncTime = new Date();
+        return localData;
+      }
+    } catch (err) {
+      console.warn("Cloud pull error:", err);
+      this.isCloudConnected = false;
+    } finally {
+      this.isSyncing = false;
+      this.updateSyncUI();
+    }
+    return null;
+  }
+
+  // Start Server-Sent Events (SSE) Real-Time Listener
+  startRealtimeListener() {
+    if (!this.cloudDbUrl) return;
+    if (this.eventSource) {
+      try { this.eventSource.close(); } catch (e) {}
+      this.eventSource = null;
+    }
+
+    try {
+      const endpoint = `${this.cloudDbUrl}/lumina_data.json`;
+      this.eventSource = new EventSource(endpoint);
+
+      this.eventSource.addEventListener('put', (e) => {
+        try {
+          if (!e.data) return;
+          const payload = JSON.parse(e.data);
+          if (payload.path === '/' && payload.data && payload.data.books) {
+            this._memoryData = payload.data;
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(payload.data));
+            sessionStorage.setItem(STORAGE_KEY, JSON.stringify(payload.data));
+            this.lastSyncTime = new Date();
+            this.isCloudConnected = true;
+            this.updateSyncUI();
+            if (window.uiRenderer && typeof window.uiRenderer.refreshCurrentView === 'function') {
+              window.uiRenderer.refreshCurrentView();
+            }
+          } else if (payload.path && payload.path !== '/') {
+            // Incremental sub-path change, pull complete fresh dataset
+            this.pullFromCloud();
+          }
+        } catch (err) {
+          console.warn("Realtime sync event parsing error:", err);
+        }
+      });
+
+      this.eventSource.addEventListener('keep-alive', () => {
+        this.isCloudConnected = true;
+        this.updateSyncUI();
+      });
+
+      this.eventSource.onerror = () => {
+        // EventSource will automatically retry connecting
+        this.updateSyncUI();
+      };
+    } catch (e) {
+      console.warn("Could not start EventSource realtime listener:", e);
+    }
+  }
+
+  // Connect new cloud database URL
+  async setCloudDbUrl(url) {
+    if (!url || !url.trim()) {
+      throw new Error("Please enter a valid Firebase Realtime Database URL.");
+    }
+    let clean = url.trim().replace(/\/+$/, '');
+    if (clean.endsWith('.json')) clean = clean.slice(0, -5);
+    if (clean.endsWith('/lumina_data')) clean = clean.slice(0, -12);
+
+    if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+      clean = 'https://' + clean;
+    }
+
+    localStorage.setItem(CLOUD_DB_KEY, clean);
+    this.cloudDbUrl = clean;
+    this.startRealtimeListener();
+    const res = await this.pullFromCloud();
+    this.updateSyncUI();
+    return res;
+  }
+
+  // Disconnect from cloud and revert to local storage
+  disconnectCloud() {
+    if (this.eventSource) {
+      try { this.eventSource.close(); } catch (e) {}
+      this.eventSource = null;
+    }
+    localStorage.removeItem(CLOUD_DB_KEY);
+    this.cloudDbUrl = null;
+    this.isCloudConnected = false;
+    this.updateSyncUI();
+  }
+
+  // Generate 1-click shareable link with ?cloud= parameter
+  getShareableLink() {
+    const origin = (typeof window !== 'undefined' && window.location && window.location.origin)
+      ? window.location.origin
+      : 'https://lumina-library-system.vercel.app';
+    const path = (typeof window !== 'undefined' && window.location && window.location.pathname)
+      ? window.location.pathname
+      : '/';
+    if (!this.cloudDbUrl) return `${origin}${path}`;
+    return `${origin}${path}?cloud=${encodeURIComponent(this.cloudDbUrl)}`;
+  }
+
+  // Update cloud badges and modal info across the app
+  updateSyncUI() {
+    try {
+      const dot = document.getElementById('cloudStatusDot');
+      const text = document.getElementById('cloudStatusText');
+      const loginDot = document.getElementById('loginCloudDot');
+      const loginText = document.getElementById('loginCloudText');
+      const modalDot = document.getElementById('cloudModalStatusDot');
+      const modalStatus = document.getElementById('cloudModalStatusText');
+      const modalSub = document.getElementById('cloudModalStatusSub');
+      const input = document.getElementById('cloudDbUrlInput');
+      const lastSyncEl = document.getElementById('cloudModalLastSync');
+
+      let statusText = 'Local Mode';
+      let dotColor = 'bg-amber-400';
+
+      if (this.isSyncing) {
+        statusText = 'Syncing...';
+        dotColor = 'bg-blue-500 animate-pulse';
+      } else if (this.isCloudConnected && this.cloudDbUrl) {
+        statusText = 'Cloud Synced';
+        dotColor = 'bg-emerald-500';
+      } else if (this.cloudDbUrl) {
+        statusText = 'Connecting...';
+        dotColor = 'bg-amber-500 animate-pulse';
+      }
+
+      if (dot) dot.className = `w-2 h-2 rounded-full ${dotColor}`;
+      if (text) text.textContent = statusText;
+      if (loginDot) loginDot.className = `w-2 h-2 rounded-full ${dotColor}`;
+      if (loginText) loginText.textContent = `Sync: ${statusText}`;
+
+      if (modalDot) modalDot.className = `w-3 h-3 rounded-full ${dotColor}`;
+      if (modalStatus) {
+        modalStatus.textContent = this.isCloudConnected
+          ? 'Live Cloud Synchronization Active'
+          : (this.cloudDbUrl ? 'Connecting to Cloud Database...' : 'Operating in Local Browser Mode');
+      }
+      if (modalSub) {
+        modalSub.textContent = this.isCloudConnected
+          ? 'All student registrations, checkouts, and returns sync across all laptops in real-time.'
+          : (this.cloudDbUrl ? 'Establishing handshake with Firebase Realtime Database...' : 'Changes are stored on this device only. Connect Firebase to sync across devices.');
+      }
+      if (input && !input.value && this.cloudDbUrl) {
+        input.value = this.cloudDbUrl;
+      }
+      if (lastSyncEl) {
+        lastSyncEl.textContent = this.lastSyncTime
+          ? `Last synced: ${this.lastSyncTime.toLocaleTimeString()}`
+          : (this.cloudDbUrl ? 'Connecting...' : 'Not connected');
+      }
+    } catch (e) {
+      // DOM elements might not be loaded yet
     }
   }
 
