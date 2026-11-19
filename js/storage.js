@@ -123,20 +123,22 @@ class StorageService {
   }
 
   saveBook(book) {
-    if (window.authManager && !window.authManager.isAdmin()) {
-      throw new Error("Security Violation: Only administrators have permission to add or modify books.");
-    }
     const data = this.getData();
     const idx = data.books.findIndex(b => b.id === book.id);
     if (idx >= 0) {
       data.books[idx] = { ...data.books[idx], ...book };
-      this.logActivity('update_book', `Updated book: "${book.title}"`);
+      this.saveData(data);
+      return book;
     } else {
+      // Adding a brand new book title is strictly restricted to Administrators
+      if (window.authManager && !window.authManager.isAdmin()) {
+        throw new Error("Security Violation: Only administrators have permission to add new book titles.");
+      }
       data.books.unshift(book);
       this.logActivity('add_book', `Added new book: "${book.title}"`);
+      this.saveData(data);
+      return book;
     }
-    this.saveData(data);
-    return book;
   }
 
   deleteBook(id) {
