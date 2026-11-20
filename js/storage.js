@@ -7,6 +7,8 @@
 const STORAGE_KEY = 'lumina_library_data_v1';
 const BACKUP_MEMBERS_KEY = 'lumina_custom_registered_members_v1';
 const BACKUP_USERS_KEY = 'lumina_custom_registered_users_v1';
+const BACKUP_BOOKS_KEY = 'lumina_custom_registered_books_v1';
+const BACKUP_LOANS_KEY = 'lumina_custom_registered_loans_v1';
 const CLOUD_DB_KEY = 'lumina_cloud_db_url_v1';
 
 class StorageService {
@@ -66,6 +68,189 @@ class StorageService {
     this.updateSyncUI();
   }
 
+  // Normalize Firebase arrays/objects: Firebase turns arrays with deleted or sparse keys into objects { "0": ... }
+  // and drops empty arrays ([]). This guarantees valid JavaScript arrays with zero null holes.
+  normalizeArray(val) {
+    if (!val) return [];
+    if (Array.isArray(val)) {
+      return val.filter(item => item !== null && item !== undefined);
+    }
+    if (typeof val === 'object') {
+      return Object.values(val).filter(item => item !== null && item !== undefined);
+    }
+    return [];
+  }
+
+  // Normalizes an entire library dataset ensuring all tables are valid non-null arrays
+  normalizeDataset(data) {
+    if (!data || typeof data !== 'object') {
+      data = JSON.parse(JSON.stringify(SEED_DATA));
+    }
+    data.books = this.normalizeArray(data.books);
+    data.members = this.normalizeArray(data.members);
+    data.loans = this.normalizeArray(data.loans);
+    data.users = this.normalizeArray(data.users);
+    data.reservations = this.normalizeArray(data.reservations);
+    data.activityLog = this.normalizeArray(data.activityLog);
+    data.categories = this.normalizeArray(data.categories || SEED_DATA.categories);
+    data.settings = data.settings || SEED_DATA.settings;
+    return data;
+  }
+
+  // Two-way non-destructive Smart Merge: combines local and cloud records by unique ID so data is NEVER wiped
+  mergeDatasets(local, incoming) {
+    if (!local) local = this.getData();
+    if (!incoming) return local;
+
+    local = this.normalizeDataset(local);
+    incoming = this.normalizeDataset(incoming);
+
+    const merged = { ...local };
+
+    // 1. Merge Books by ID (seed books + local books + cloud books + backup books)
+    const bookMap = new Map();
+    SEED_DATA.books.forEach(b => bookMap.set(b.id.toLowerCase(), { ...b }));
+    local.books.forEach(b => {
+      if (b && b.id) bookMap.set(b.id.toLowerCase(), { ...b });
+    });
+    incoming.books.forEach(b => {
+      if (b && b.id) {
+        const key = b.id.toLowerCase();
+        if (bookMap.has(key)) {
+          bookMap.set(key, { ...bookMap.get(key), ...b });
+        } else {
+          bookMap.set(key, { ...b });
+        }
+      }
+    });
+    try {
+      const backupBooksRaw = localStorage.getItem(BACKUP_BOOKS_KEY);
+      if (backupBooksRaw) {
+        const backupBooks = JSON.parse(backupBooksRaw);
+        backupBooks.forEach(bb => {
+          if (bb && bb.id && !bookMap.has(bb.id.toLowerCase())) {
+            bookMap.set(bb.id.toLowerCase(), bb);
+          }
+        });
+      }
+    } catch (e) {}
+    merged.books = Array.from(bookMap.values());
+
+    // 2. Merge Members by ID (seed members + local members + cloud members + backup members)
+    const memberMap = new Map();
+    SEED_DATA.members.forEach(m => memberMap.set(m.id.toLowerCase(), { ...m }));
+    local.members.forEach(m => {
+      if (m && m.id) memberMap.set(m.id.toLowerCase(), { ...m });
+    });
+    incoming.members.forEach(m => {
+      if (m && m.id) {
+        const key = m.id.toLowerCase();
+        if (memberMap.has(key)) {
+          memberMap.set(key, { ...memberMap.get(key), ...m });
+        } else {
+          memberMap.set(key, { ...m });
+        }
+      }
+    });
+    try {
+      const backupMembersRaw = localStorage.getItem(BACKUP_MEMBERS_KEY);
+      if (backupMembersRaw) {
+        const backupMembers = JSON.parse(backupMembersRaw);
+        backupMembers.forEach(bm => {
+          if (bm && bm.id && !memberMap.has(bm.id.toLowerCase())) {
+            memberMap.set(bm.id.toLowerCase(), bm);
+          }
+        });
+      }
+    } catch (e) {}
+    merged.members = Array.from(memberMap.values());
+
+    // 3. Merge Users by Username & ID
+    const userMap = new Map();
+    SEED_DATA.users.forEach(u => userMap.set(u.username.toLowerCase(), { ...u }));
+    local.users.forEach(u => {
+      if (u && u.username) userMap.set(u.username.toLowerCase(), { ...u });
+    });
+    incoming.users.forEach(u => {
+      if (u && u.username) {
+        const key = u.username.toLowerCase();
+        if (userMap.has(key)) {
+          userMap.set(key, { ...userMap.get(key), ...u });
+        } else {
+          userMap.set(key, { ...u });
+        }
+      }
+    });
+    try {
+      const backupUsersRaw = localStorage.getItem(BACKUP_USERS_KEY);
+      if (backupUsersRaw) {
+        const backupUsers = JSON.parse(backupUsersRaw);
+        backupUsers.forEach(bu => {
+          if (bu && bu.username && !userMap.has(bu.username.toLowerCase())) {
+            userMap.set(bu.username.toLowerCase(), bu);
+          }
+        });
+      }
+    } catch (e) {}
+    merged.users = Array.from(userMap.values());
+
+    // 4. Merge Loans by ID
+    const loanMap = new Map();
+    local.loans.forEach(l => {
+      if (l && l.id) loanMap.set(l.id, { ...l });
+    });
+    incoming.loans.forEach(l => {
+      if (l && l.id) {
+        if (loanMap.has(l.id)) {
+          const existing = loanMap.get(l.id);
+          if (existing.status === 'Returned' || l.status === 'Returned') {
+            loanMap.set(l.id, { ...existing, ...l, status: 'Returned' });
+          } else {
+            loanMap.set(l.id, { ...existing, ...l });
+          }
+        } else {
+          loanMap.set(l.id, { ...l });
+        }
+      }
+    });
+    try {
+      const backupLoansRaw = localStorage.getItem(BACKUP_LOANS_KEY);
+      if (backupLoansRaw) {
+        const backupLoans = JSON.parse(backupLoansRaw);
+        backupLoans.forEach(bl => {
+          if (bl && bl.id && !loanMap.has(bl.id)) {
+            loanMap.set(bl.id, bl);
+          }
+        });
+      }
+    } catch (e) {}
+    merged.loans = Array.from(loanMap.values());
+
+    // 5. Merge Reservations by ID
+    const resMap = new Map();
+    local.reservations.forEach(r => {
+      if (r && r.id) resMap.set(r.id, { ...r });
+    });
+    incoming.reservations.forEach(r => {
+      if (r && r.id) resMap.set(r.id, { ...r });
+    });
+    merged.reservations = Array.from(resMap.values());
+
+    // 6. Settings & Categories
+    merged.settings = { ...SEED_DATA.settings, ...(local.settings || {}), ...(incoming.settings || {}) };
+    const catSet = new Set([...SEED_DATA.categories, ...(local.categories || []), ...(incoming.categories || [])]);
+    merged.categories = Array.from(catSet);
+
+    // 7. Activity Log
+    const actMap = new Map();
+    [...(incoming.activityLog || []), ...(local.activityLog || [])].forEach(a => {
+      if (a && a.id) actMap.set(a.id, a);
+    });
+    merged.activityLog = Array.from(actMap.values()).slice(0, 50);
+
+    return merged;
+  }
+
   init() {
     try {
       const existing = localStorage.getItem(STORAGE_KEY);
@@ -73,38 +258,63 @@ class StorageService {
       if (!existing) {
         parsed = JSON.parse(JSON.stringify(SEED_DATA));
       } else {
-        parsed = JSON.parse(existing);
-        if (!parsed.books || !parsed.members || !parsed.loans) {
-          console.warn("Storage data incomplete, restoring base seed data.");
+        try {
+          parsed = JSON.parse(existing);
+        } catch (e) {
           parsed = JSON.parse(JSON.stringify(SEED_DATA));
         }
       }
 
-      // 1. Ensure all default seed users exist (admin, staff, student1..5)
-      if (!parsed.users) {
-        parsed.users = JSON.parse(JSON.stringify(SEED_DATA.users || []));
-      } else {
-        SEED_DATA.users.forEach(su => {
-          if (!parsed.users.some(u => u.username && u.username.toLowerCase() === su.username.toLowerCase())) {
-            parsed.users.push(JSON.parse(JSON.stringify(su)));
-          }
-        });
-      }
+      parsed = this.normalizeDataset(parsed);
 
-      // 2. Ensure all custom enrolled members survive any reload/reset
+      // 1. Ensure all default seed books exist without wiping custom ones
+      SEED_DATA.books.forEach(sb => {
+        if (!parsed.books.some(b => b.id && b.id.toLowerCase() === sb.id.toLowerCase())) {
+          parsed.books.push(JSON.parse(JSON.stringify(sb)));
+        }
+      });
+
+      // 2. Ensure all default seed members exist without wiping custom ones
+      SEED_DATA.members.forEach(sm => {
+        if (!parsed.members.some(m => m.id && m.id.toLowerCase() === sm.id.toLowerCase())) {
+          parsed.members.push(JSON.parse(JSON.stringify(sm)));
+        }
+      });
+
+      // 3. Ensure all default seed users exist (admin, staff, student1..5)
+      SEED_DATA.users.forEach(su => {
+        if (!parsed.users.some(u => u.username && u.username.toLowerCase() === su.username.toLowerCase())) {
+          parsed.users.push(JSON.parse(JSON.stringify(su)));
+        }
+      });
+
+      // 4. Restore custom backup books
+      try {
+        const backupBooksRaw = localStorage.getItem(BACKUP_BOOKS_KEY);
+        if (backupBooksRaw) {
+          const backupBooks = JSON.parse(backupBooksRaw);
+          backupBooks.forEach(bb => {
+            if (!parsed.books.some(b => b.id && b.id.toLowerCase() === bb.id.toLowerCase())) {
+              parsed.books.unshift(bb);
+            }
+          });
+        }
+      } catch (err) {}
+
+      // 5. Restore custom enrolled members
       try {
         const backupRaw = localStorage.getItem(BACKUP_MEMBERS_KEY) || sessionStorage.getItem(BACKUP_MEMBERS_KEY);
         if (backupRaw) {
           const backupMembers = JSON.parse(backupRaw);
           backupMembers.forEach(bm => {
-            if (!parsed.members.some(m => m.id === bm.id)) {
+            if (!parsed.members.some(m => m.id && m.id.toLowerCase() === bm.id.toLowerCase())) {
               parsed.members.unshift(bm);
             }
           });
         }
       } catch (err) {}
 
-      // 3. Ensure all custom registered user accounts survive any reload/reset
+      // 6. Restore custom registered user accounts
       try {
         const backupUsersRaw = localStorage.getItem(BACKUP_USERS_KEY) || sessionStorage.getItem(BACKUP_USERS_KEY);
         if (backupUsersRaw) {
@@ -117,6 +327,7 @@ class StorageService {
         }
       } catch (err) {}
 
+      this._memoryData = parsed;
       this.saveData(parsed);
     } catch (e) {
       console.error("LocalStorage access failed, fallback to memory:", e);
@@ -132,22 +343,31 @@ class StorageService {
 
   getData() {
     try {
+      if (this._memoryData) {
+        return this.normalizeDataset(this._memoryData);
+      }
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) return JSON.parse(raw);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        this._memoryData = this.normalizeDataset(parsed);
+        return this._memoryData;
+      }
     } catch (e) {
       console.error("Error reading localStorage:", e);
     }
-    return this._memoryData || JSON.parse(JSON.stringify(SEED_DATA));
+    this._memoryData = JSON.parse(JSON.stringify(SEED_DATA));
+    return this._memoryData;
   }
 
   saveData(data) {
     try {
-      const str = JSON.stringify(data);
+      const normalized = this.normalizeDataset(data);
+      const str = JSON.stringify(normalized);
       localStorage.setItem(STORAGE_KEY, str);
       sessionStorage.setItem(STORAGE_KEY, str);
-      this._memoryData = data;
+      this._memoryData = normalized;
       if (this.cloudDbUrl) {
-        this.pushToCloud(data);
+        this.pushToCloud(normalized);
       }
       return true;
     } catch (e) {
@@ -160,13 +380,13 @@ class StorageService {
     }
   }
 
-  // Live Cloud Push (Debounced 250ms for performance and batching)
+  // Live Cloud Push (Debounced 300ms for performance and batching)
   pushToCloud(data) {
     if (!this.cloudDbUrl) return;
     if (this._pushDebounceTimer) {
       clearTimeout(this._pushDebounceTimer);
     }
-    this._pendingCloudData = data;
+    this._pendingCloudData = this.normalizeDataset(JSON.parse(JSON.stringify(data)));
     this._pushDebounceTimer = setTimeout(async () => {
       const dataToPush = this._pendingCloudData;
       if (!dataToPush || !this.cloudDbUrl) return;
@@ -191,10 +411,10 @@ class StorageService {
         this.isSyncing = false;
         this.updateSyncUI();
       }
-    }, 250);
+    }, 300);
   }
 
-  // Pull latest full dataset from Cloud Database
+  // Pull latest full dataset from Cloud Database with Non-Destructive Smart Merge
   async pullFromCloud() {
     if (!this.cloudDbUrl) return null;
     try {
@@ -205,18 +425,30 @@ class StorageService {
       if (!res.ok) {
         throw new Error(`Cloud server returned HTTP ${res.status}`);
       }
-      const data = await res.json();
-      if (data && data.books && data.members && data.loans) {
+      const cloudData = await res.json();
+      if (cloudData && typeof cloudData === 'object') {
+        const normalizedCloud = this.normalizeDataset(cloudData);
+        const currentLocal = this.getData();
+        const merged = this.mergeDatasets(currentLocal, normalizedCloud);
+
         this.isCloudConnected = true;
         this.lastSyncTime = new Date();
-        this._memoryData = data;
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        this._memoryData = merged;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+
+        // If local device had custom books/members that weren't in cloud yet, push back the merged dataset!
+        const localHasNewBooks = currentLocal.books.some(lb => !normalizedCloud.books.some(cb => cb.id && cb.id.toLowerCase() === lb.id.toLowerCase()));
+        const localHasNewMembers = currentLocal.members.some(lm => !normalizedCloud.members.some(cm => cm.id && cm.id.toLowerCase() === lm.id.toLowerCase()));
+        if (localHasNewBooks || localHasNewMembers) {
+          this.pushToCloud(merged);
+        }
+
         if (window.uiRenderer && typeof window.uiRenderer.refreshCurrentView === 'function') {
           window.uiRenderer.refreshCurrentView();
         }
-        return data;
-      } else if (data === null) {
+        return merged;
+      } else if (cloudData === null) {
         // Newly created database is empty. Auto-seed with local dataset!
         console.log("Empty cloud database detected. Auto-seeding local library data to cloud...");
         const localData = this.getData();
@@ -239,7 +471,7 @@ class StorageService {
     return null;
   }
 
-  // Start Server-Sent Events (SSE) Real-Time Listener
+  // Start Server-Sent Events (SSE) Real-Time Listener with Automatic Merge
   startRealtimeListener() {
     if (!this.cloudDbUrl) return;
     if (this.eventSource) {
@@ -255,10 +487,12 @@ class StorageService {
         try {
           if (!e.data) return;
           const payload = JSON.parse(e.data);
-          if (payload.path === '/' && payload.data && payload.data.books) {
-            this._memoryData = payload.data;
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(payload.data));
-            sessionStorage.setItem(STORAGE_KEY, JSON.stringify(payload.data));
+          if (payload.path === '/' && payload.data && typeof payload.data === 'object') {
+            const normalized = this.normalizeDataset(payload.data);
+            const merged = this.mergeDatasets(this.getData(), normalized);
+            this._memoryData = merged;
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+            sessionStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
             this.lastSyncTime = new Date();
             this.isCloudConnected = true;
             this.updateSyncUI();
@@ -404,15 +638,17 @@ class StorageService {
 
   // Books
   getBooks() {
-    return this.getData().books || [];
+    return this.normalizeArray(this.getData().books);
   }
 
   getBook(id) {
-    return this.getBooks().find(b => b.id === id);
+    if (!id) return null;
+    return this.getBooks().find(b => b.id && b.id.toLowerCase() === id.toLowerCase());
   }
 
   saveBook(book) {
     const data = this.getData();
+    data.books = this.normalizeArray(data.books);
     const idx = data.books.findIndex(b => b.id && b.id.toLowerCase() === (book.id || '').toLowerCase());
     if (idx >= 0) {
       data.books[idx] = { ...data.books[idx], ...book };
@@ -422,6 +658,17 @@ class StorageService {
       this.logActivity('add_book', `Added new book: "${book.title}"`);
     }
     this.saveData(data);
+
+    // Save to backup keys so newly added books survive any reset or reload
+    try {
+      const backupRaw = localStorage.getItem(BACKUP_BOOKS_KEY);
+      const backupBooks = backupRaw ? JSON.parse(backupRaw) : [];
+      const bIdx = backupBooks.findIndex(b => b.id && b.id.toLowerCase() === book.id.toLowerCase());
+      if (bIdx >= 0) backupBooks[bIdx] = book;
+      else backupBooks.unshift(book);
+      localStorage.setItem(BACKUP_BOOKS_KEY, JSON.stringify(backupBooks));
+    } catch (e) {}
+
     return book;
   }
 
@@ -430,6 +677,7 @@ class StorageService {
       throw new Error("Security Violation: Only administrators have permission to delete books.");
     }
     const data = this.getData();
+    data.books = this.normalizeArray(data.books);
     const book = data.books.find(b => b.id === id);
     if (!book) return false;
 
@@ -444,21 +692,33 @@ class StorageService {
     data.reservations = (data.reservations || []).filter(r => r.bookId !== id);
     this.logActivity('delete_book', `Removed book: "${book.title}"`);
     this.saveData(data);
+
+    // Remove from backup books key
+    try {
+      const backupRaw = localStorage.getItem(BACKUP_BOOKS_KEY);
+      if (backupRaw) {
+        const backupBooks = JSON.parse(backupRaw).filter(b => b.id && b.id.toLowerCase() !== id.toLowerCase());
+        localStorage.setItem(BACKUP_BOOKS_KEY, JSON.stringify(backupBooks));
+      }
+    } catch (e) {}
+
     return true;
   }
 
   // Members
   getMembers() {
-    return this.getData().members || [];
+    return this.normalizeArray(this.getData().members);
   }
 
   getMember(id) {
-    return this.getMembers().find(m => m.id === id);
+    if (!id) return null;
+    return this.getMembers().find(m => m.id && m.id.toLowerCase() === id.toLowerCase());
   }
 
   saveMember(member) {
     const data = this.getData();
-    const idx = data.members.findIndex(m => m.id === member.id);
+    data.members = this.normalizeArray(data.members);
+    const idx = data.members.findIndex(m => m.id && m.id.toLowerCase() === member.id.toLowerCase());
     if (idx >= 0) {
       data.members[idx] = { ...data.members[idx], ...member };
       this.logActivity('update_member', `Updated member: ${member.name}`);
@@ -472,7 +732,7 @@ class StorageService {
     try {
       const backupRaw = localStorage.getItem(BACKUP_MEMBERS_KEY) || sessionStorage.getItem(BACKUP_MEMBERS_KEY);
       const backupMembers = backupRaw ? JSON.parse(backupRaw) : [];
-      const bIdx = backupMembers.findIndex(m => m.id === member.id);
+      const bIdx = backupMembers.findIndex(m => m.id && m.id.toLowerCase() === member.id.toLowerCase());
       if (bIdx >= 0) backupMembers[bIdx] = member;
       else backupMembers.unshift(member);
       localStorage.setItem(BACKUP_MEMBERS_KEY, JSON.stringify(backupMembers));
@@ -484,53 +744,77 @@ class StorageService {
 
   deleteMember(id) {
     const data = this.getData();
-    const member = data.members.find(m => m.id === id);
+    data.members = this.normalizeArray(data.members);
+    const member = data.members.find(m => m.id && m.id.toLowerCase() === id.toLowerCase());
     if (!member) return false;
 
-    const hasActiveLoan = (data.loans || []).some(l => l.memberId === id && l.status === 'Active');
+    const hasActiveLoan = (data.loans || []).some(l => l.memberId && l.memberId.toLowerCase() === id.toLowerCase() && l.status === 'Active');
     if (hasActiveLoan) {
       throw new Error(`Cannot delete member ${member.name} with active outstanding loans.`);
     }
 
-    data.members = data.members.filter(m => m.id !== id);
+    data.members = data.members.filter(m => m.id && m.id.toLowerCase() !== id.toLowerCase());
     this.logActivity('delete_member', `Removed member: ${member.name}`);
     this.saveData(data);
+
+    // Remove from backup members key
+    try {
+      const backupRaw = localStorage.getItem(BACKUP_MEMBERS_KEY);
+      if (backupRaw) {
+        const backupMembers = JSON.parse(backupRaw).filter(m => m.id && m.id.toLowerCase() !== id.toLowerCase());
+        localStorage.setItem(BACKUP_MEMBERS_KEY, JSON.stringify(backupMembers));
+      }
+    } catch (e) {}
+
     return true;
   }
 
   // Loans
   getLoans() {
-    return this.getData().loans || [];
+    return this.normalizeArray(this.getData().loans);
   }
 
   getLoan(id) {
-    return this.getLoans().find(l => l.id === id);
+    if (!id) return null;
+    return this.getLoans().find(l => l.id && l.id.toLowerCase() === id.toLowerCase());
   }
 
   saveLoan(loan) {
     const data = this.getData();
-    const idx = data.loans.findIndex(l => l.id === loan.id);
+    data.loans = this.normalizeArray(data.loans);
+    const idx = data.loans.findIndex(l => l.id && l.id.toLowerCase() === loan.id.toLowerCase());
     if (idx >= 0) {
       data.loans[idx] = { ...data.loans[idx], ...loan };
     } else {
       data.loans.unshift(loan);
     }
     this.saveData(data);
+
+    // Save to backup loans key
+    try {
+      const backupRaw = localStorage.getItem(BACKUP_LOANS_KEY);
+      const backupLoans = backupRaw ? JSON.parse(backupRaw) : [];
+      const bIdx = backupLoans.findIndex(l => l.id && l.id.toLowerCase() === loan.id.toLowerCase());
+      if (bIdx >= 0) backupLoans[bIdx] = loan;
+      else backupLoans.unshift(loan);
+      localStorage.setItem(BACKUP_LOANS_KEY, JSON.stringify(backupLoans));
+    } catch (e) {}
+
     return loan;
   }
 
   // Reservations
   getReservations() {
-    return this.getData().reservations || [];
+    return this.normalizeArray(this.getData().reservations);
   }
 
   saveReservation(res) {
     const data = this.getData();
-    const idx = (data.reservations || []).findIndex(r => r.id === res.id);
+    data.reservations = this.normalizeArray(data.reservations);
+    const idx = data.reservations.findIndex(r => r.id === res.id);
     if (idx >= 0) {
       data.reservations[idx] = { ...data.reservations[idx], ...res };
     } else {
-      data.reservations = data.reservations || [];
       data.reservations.push(res);
     }
     this.saveData(data);
@@ -539,15 +823,14 @@ class StorageService {
 
   deleteReservation(id) {
     const data = this.getData();
-    data.reservations = (data.reservations || []).filter(r => r.id !== id);
+    data.reservations = this.normalizeArray(data.reservations).filter(r => r.id !== id);
     this.saveData(data);
   }
 
   // Users & Authentication
   getUsers() {
     const data = this.getData();
-    let users = data.users || [];
-    if (!Array.isArray(users)) users = [];
+    let users = this.normalizeArray(data.users);
 
     // Always guarantee core seed users (admin, staff, student1..5, student) exist
     if (typeof SEED_DATA !== 'undefined' && Array.isArray(SEED_DATA.users)) {
@@ -560,7 +843,10 @@ class StorageService {
       });
       if (needsSave && data) {
         data.users = users;
-        this.saveData(data);
+        this._memoryData = data;
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        } catch (e) {}
       }
     }
     return users;
@@ -621,7 +907,7 @@ class StorageService {
 
   saveUser(user) {
     const data = this.getData();
-    data.users = data.users || [];
+    data.users = this.normalizeArray(data.users);
     const idx = data.users.findIndex(u => u.id === user.id);
     if (idx >= 0) {
       data.users[idx] = { ...data.users[idx], ...user };
@@ -634,7 +920,7 @@ class StorageService {
     try {
       const backupRaw = localStorage.getItem(BACKUP_USERS_KEY) || sessionStorage.getItem(BACKUP_USERS_KEY);
       const backupUsers = backupRaw ? JSON.parse(backupRaw) : [];
-      const bIdx = backupUsers.findIndex(u => u.username.toLowerCase() === user.username.toLowerCase());
+      const bIdx = backupUsers.findIndex(u => u.username && u.username.toLowerCase() === user.username.toLowerCase());
       if (bIdx >= 0) backupUsers[bIdx] = user;
       else backupUsers.push(user);
       localStorage.setItem(BACKUP_USERS_KEY, JSON.stringify(backupUsers));
