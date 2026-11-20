@@ -41,7 +41,7 @@ class LibraryEngine {
         const overdueDays = this.dayDiff(loan.dueDate, today);
         if (overdueDays > 0) {
           loan.status = 'Overdue';
-          loan.fineAmount = parseFloat((overdueDays * (settings.dailyFineRate || 0.50)).toFixed(2));
+          loan.fineAmount = parseFloat((overdueDays * (settings.dailyFineRate || 5.00)).toFixed(2));
           modified = true;
         } else {
           loan.status = 'Active';
@@ -194,7 +194,7 @@ class LibraryEngine {
       }
     }
 
-    const fineNote = loan.fineAmount > 0 ? ` with ${waiveFine ? 'waived' : 'collected'} fine of $${loan.fineAmount.toFixed(2)}` : '';
+    const fineNote = loan.fineAmount > 0 ? ` with ${waiveFine ? 'waived' : 'collected'} fine of ${settings.currencySymbol || '₹'}${loan.fineAmount.toFixed(2)}` : '';
     this.storage.logActivity('return', `${member ? member.name : 'Member'} returned "${book ? book.title : 'Book'}"${fineNote}`);
 
     return loan;
@@ -289,7 +289,8 @@ class LibraryEngine {
     loan.finePaid = true;
     if (waive) loan.fineWaived = true;
     this.storage.saveLoan(loan);
-    this.storage.logActivity('fine_settled', `${waive ? 'Waived' : 'Paid'} fine of $${loan.fineAmount.toFixed(2)} on loan ${loan.id}`);
+    const settings = this.storage.getSettings();
+    this.storage.logActivity('fine_settled', `${waive ? 'Waived' : 'Paid'} fine of ${settings.currencySymbol || '₹'}${loan.fineAmount.toFixed(2)} on loan ${loan.id}`);
     return loan;
   }
 
@@ -344,7 +345,7 @@ class LibraryEngine {
       categoryCounts,
       categoryBorrows,
       topBooks,
-      currency: settings.currencySymbol || '$'
+      currency: settings.currencySymbol || '₹'
     };
   }
 }

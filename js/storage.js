@@ -238,6 +238,12 @@ class StorageService {
 
     // 6. Settings & Categories
     merged.settings = { ...SEED_DATA.settings, ...(local.settings || {}), ...(incoming.settings || {}) };
+    if (!merged.settings.currencySymbol || merged.settings.currencySymbol === '$') {
+      merged.settings.currencySymbol = '₹';
+    }
+    if (merged.settings.dailyFineRate === 0.5 || !merged.settings.dailyFineRate) {
+      merged.settings.dailyFineRate = 5.00;
+    }
     const catSet = new Set([...SEED_DATA.categories, ...(local.categories || []), ...(incoming.categories || [])]);
     merged.categories = Array.from(catSet);
 
@@ -326,6 +332,15 @@ class StorageService {
           });
         }
       } catch (err) {}
+
+      // 7. Auto-migrate currency symbol and daily fine rate from USD ($ / 0.50) to INR (₹ / 5.00)
+      if (!parsed.settings) parsed.settings = { ...SEED_DATA.settings };
+      if (!parsed.settings.currencySymbol || parsed.settings.currencySymbol === '$') {
+        parsed.settings.currencySymbol = '₹';
+      }
+      if (parsed.settings.dailyFineRate === 0.5 || !parsed.settings.dailyFineRate) {
+        parsed.settings.dailyFineRate = 5.00;
+      }
 
       this._memoryData = parsed;
       this.saveData(parsed);

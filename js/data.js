@@ -7,9 +7,9 @@ const SEED_DATA = {
   settings: {
     libraryName: "Lumina Central Library",
     loanDurationDays: 14,
-    dailyFineRate: 0.50,
+    dailyFineRate: 5.00,
     maxRenewalCount: 2,
-    currencySymbol: "$",
+    currencySymbol: "₹",
     allowReservations: true
   },
 
@@ -395,7 +395,7 @@ const SEED_DATA = {
       dueDate: "2026-11-15",
       returnDate: null,
       renewalCount: 0,
-      fineAmount: 2.00, // 4 days overdue as of 2026-11-19
+      fineAmount: 20.00, // 4 days overdue as of 2026-11-19 (4 * ₹5.00)
       finePaid: false,
       status: "Overdue"
     },
@@ -407,8 +407,7 @@ const SEED_DATA = {
       dueDate: "2026-11-08",
       returnDate: null,
       renewalCount: 0,
-      fineAmount: 5.50, // 11 days overdue
-      finePaid: false,
+      fineAmount: 55.00, // 11 days overdue (11 * ₹5.00)      finePaid: false,
       status: "Overdue"
     },
     {
@@ -479,7 +478,7 @@ const SEED_DATA = {
       dueDate: "2026-09-24",
       returnDate: "2026-09-28",
       renewalCount: 0,
-      fineAmount: 2.00,
+      fineAmount: 20.00,
       finePaid: true,
       status: "Returned"
     },

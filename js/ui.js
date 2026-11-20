@@ -218,7 +218,7 @@ class UIRenderer {
                     </div>
                   </div>
                   <div class="flex items-center gap-2 self-end sm:self-center">
-                    <span class="badge badge-danger text-xs font-bold">$${(loan.fineAmount || 0).toFixed(2)} Fine</span>
+                    <span class="badge badge-danger text-xs font-bold">₹${(loan.fineAmount || 0).toFixed(2)} Fine</span>
                     <button class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white transition-smooth" onclick="window.uiRenderer.openReturnModal('${loan.id}')">
                       Process Return
                     </button>
@@ -674,7 +674,7 @@ class UIRenderer {
               <div class="text-[10px] text-slate-400 mt-0.5">on ${loan.returnDate}</div>
             ` : isOverdue ? `
               <span class="badge badge-danger">Overdue</span>
-              <div class="text-[10px] text-rose-600 font-bold mt-0.5">$${(loan.fineAmount || 0).toFixed(2)} fine</div>
+              <div class="text-[10px] text-rose-600 font-bold mt-0.5">₹${(loan.fineAmount || 0).toFixed(2)} fine</div>
             ` : `
               <span class="badge badge-success">Active</span>
               <div class="text-[10px] text-slate-400 mt-0.5">${loan.renewalCount || 0} renewals</div>
@@ -883,7 +883,7 @@ class UIRenderer {
     const fineAmountEl = document.getElementById('returnFineAmount');
     if (loan.fineAmount > 0) {
       fineContainer.classList.remove('hidden');
-      fineAmountEl.textContent = `$${loan.fineAmount.toFixed(2)}`;
+      fineAmountEl.textContent = `₹${loan.fineAmount.toFixed(2)}`;
     } else {
       fineContainer.classList.add('hidden');
     }
@@ -1310,7 +1310,7 @@ class UIRenderer {
           <div class="bg-white dark:bg-slate-800 p-5 rounded-2xl border ${totalFines > 0 ? 'border-rose-200 dark:border-rose-900 bg-rose-50/20' : 'border-slate-200 dark:border-slate-700'} shadow-sm">
             <span class="text-xs font-semibold ${totalFines > 0 ? 'text-rose-600' : 'text-slate-400'} uppercase tracking-wider block mb-1">Overdue Fines</span>
             <div class="flex items-baseline gap-2">
-              <span class="text-2xl font-bold ${totalFines > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-900 dark:text-white'}">$${totalFines.toFixed(2)}</span>
+              <span class="text-2xl font-bold ${totalFines > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-900 dark:text-white'}">₹${totalFines.toFixed(2)}</span>
               <span class="text-xs text-slate-500">${overdueLoans.length > 0 ? `${overdueLoans.length} overdue items` : 'All clear! No fines'}</span>
             </div>
             <p class="text-[11px] text-slate-400 mt-2">${totalFines > 0 ? 'Please return book and settle fees with librarian.' : 'Standard 14-day loan period applies.'}</p>
@@ -1753,10 +1753,10 @@ class UIRenderer {
         <div><strong>Issued:</strong> ${loan.issueDate}</div>
         <div><strong>Due Date:</strong> ${loan.dueDate}</div>
         ${loan.returnDate ? `<div><strong>Returned On:</strong> ${loan.returnDate}</div>` : ''}
-        ${loan.fineAmount > 0 ? `<div><strong>Fine Assessed:</strong> $${loan.fineAmount.toFixed(2)} (${loan.finePaid ? 'PAID' : 'PENDING'})</div>` : ''}
+        ${loan.fineAmount > 0 ? `<div><strong>Fine Assessed:</strong> ₹${loan.fineAmount.toFixed(2)} (${loan.finePaid ? 'PAID' : 'PENDING'})</div>` : ''}
       </div>
       <div style="font-size: 10px; text-align: center; color: #444;">
-        Please return all borrowed materials by due date to avoid fines ($${settings.dailyFineRate || 0.50}/day).
+        Please return all borrowed materials by due date to avoid fines (₹${settings.dailyFineRate || 5.00}/day).
         <br><br>
         * * * Thank you for using Lumina Library * * *
       </div>

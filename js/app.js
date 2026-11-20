@@ -525,7 +525,7 @@ function setupForms() {
       e.preventDefault();
       const libName = document.getElementById('settingsLibraryNameInput').value.trim();
       const duration = parseInt(document.getElementById('settingsLoanDurationInput').value) || 14;
-      const fineRate = parseFloat(document.getElementById('settingsDailyFineInput').value) || 0.50;
+      const fineRate = parseFloat(document.getElementById('settingsDailyFineInput').value) || 5.00;
       const renewals = parseInt(document.getElementById('settingsMaxRenewalsInput').value) || 2;
 
       window.storageService.saveSettings({
